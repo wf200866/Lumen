@@ -1,7 +1,6 @@
 package com.lumen.image;
 
 import android.Manifest;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -36,31 +35,41 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Lumen 主界面。
+ *
+ * 关键设计：
+ * - 后端是常驻 root 进程，UI 只负责发请求和显示
+ * - 生成跑在独立线程，Activity 重建不中断（用静态 holder 保住回调）
+ * - 首步慢（100-160s）后面快，进度条按步走
+ */
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "LumenMain";
     private static final int REQ_PERM = 20;
 
-    // 跨 Activity 重建保留
-    private static final String K_PROMPT = "v_prompt";
-    private static final String K_NEG    = "v_neg";
-    private static final String K_SEED   = "v_seed";
-    private static final String K_STATUS = "v_status";
-    private static final String K_BUSY   = "v_busy";
+    private static final String K_PROMPT = "s_prompt";
+    private static final String K_NEG    = "s_neg";
+    private static final String K_SEED   = "s_seed";
+
+    // ── 跨实例保活的生成状态 ──────────────────────────
+    static final AtomicBoolean BUSY = new AtomicBoolean(false);
+    static volatile String  STATUS_TEXT = "";
+    static volatile int     PROGRESS = 0;
+    static volatile boolean INDETERMINATE = true;
+    static volatile Bitmap  CURRENT_BMP = null;
+    static volatile boolean CANCEL_FLAG = false;
 
     private Config cfg;
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final AtomicBoolean busy = new AtomicBoolean(false);
 
     private EditText etPrompt, etNeg, etSeed;
     private Button btnStart, btnStop, btnSave, btnSettings;
     private TextView tvStatus, tvInfo, tvSteps;
-    private ImageView ivImage;
+    private ImageView ivImage, ivPlaceholder;
     private ProgressBar bar;
     private SeekBar sbSteps;
-
-    private Bitmap lastBitmap;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -83,8 +92,10 @@ public class MainActivity extends AppCompatActivity {
         bar         = findViewById(R.id.pbar);
         sbSteps     = findViewById(R.id.sb_steps);
 
-        sbSteps.setMax(20);
-        sbSteps.setProgress(cfg.steps());
+        ivPlaceholder = findViewById(R.id.tv_placeholder);
+
+        sbSteps.setMax(12);
+        sbSteps.setProgress(Math.min(cfg.steps(), 12));
         tvSteps.setText(cfg.steps() + " 步");
         sbSteps.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
@@ -98,60 +109,79 @@ public class MainActivity extends AppCompatActivity {
 
         btnStart.setOnClickListener(v -> doGenerate());
         btnStop.setOnClickListener(v -> {
-            busy.set(false);
-            tvStatus.setText("已取消等待（后端会跑完当前任务）");
-            resetUi();
+            CANCEL_FLAG = true;
+            tvStatus.setText("正在断开…（后端会跑完当前步）");
         });
         btnSave.setOnClickListener(v -> saveImage());
         btnSettings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        ivImage.setOnClickListener(v -> { if (lastBitmap != null) openFullscreen(); });
+        ivImage.setOnClickListener(v -> { if (CURRENT_BMP != null) openFullscreen(); });
 
         requestPerms();
-        refreshStatusAsync();
+
+        // 恢复跨实例状态
+        restoreState();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        tvInfo.setText((cfg.isGpu() ? "GPU (OpenCL)" : "CPU") + " · "
-                + cfg.size() + "×" + cfg.size());
-        if (!busy.get()) btnStart.setEnabled(true);
-        refreshStatusAsync();
+        tvInfo.setText((cfg.isGpu() ? "GPU" : "CPU") + " · " + cfg.size() + "×" + cfg.size());
+        restoreState();
+        refreshStatus();
     }
 
-    /** 后台查后端状态，不阻塞 UI */
-    private void refreshStatusAsync() {
+    /** 从静态 holder 恢复 UI（Activity 重建 / 切回来时用） */
+    private void restoreState() {
+        if (CURRENT_BMP != null) {
+            ivImage.setImageBitmap(CURRENT_BMP);
+            if (ivPlaceholder != null) ivPlaceholder.setVisibility(View.GONE);
+        }
+        if (!STATUS_TEXT.isEmpty()) tvStatus.setText(STATUS_TEXT);
+        if (BUSY.get()) {
+            btnStart.setEnabled(false);
+            bar.setVisibility(View.VISIBLE);
+            bar.setIndeterminate(INDETERMINATE);
+            bar.setProgress(PROGRESS);
+        } else {
+            btnStart.setEnabled(true);
+            bar.setVisibility(View.GONE);
+        }
+    }
+
+    /** 查后端状态（不阻塞 UI） */
+    private void refreshStatus() {
+        if (BUSY.get()) return;
         pool.execute(() -> {
-            String st = RootBackend.status();
             boolean port = RootBackend.pingPort();
+            String st = RootBackend.status();
             ui.post(() -> {
-                if (busy.get()) return;
-                if (st.startsWith("RUNNING") && port) {
-                    // 从 "RUNNING pid=123 rss=4400MB oom_adj=-1000 port=1" 取 rss
-                    String extra = "";
-                    int i = st.indexOf("rss=");
-                    if (i >= 0) {
-                        int j = st.indexOf("MB", i);
-                        if (j > i) extra = " · " + st.substring(i + 4, j) + " MB";
-                    }
-                    tvStatus.setText("后端运行中 ✓" + extra);
+                if (BUSY.get()) return;
+                if (port) {
+                    int rss = RootBackend.parseRss(st);
+                    STATUS_TEXT = "后端就绪 ✓" + (rss > 0 ? " · " + rss + " MB" : "");
                 } else if (st.startsWith("RUNNING")) {
-                    tvStatus.setText("后端启动中…（加载模型）");
+                    STATUS_TEXT = "后端启动中…";
+                } else if ("NOTDEPLOYED".equals(st)) {
+                    STATUS_TEXT = "后端未部署，点生成自动部署";
                 } else {
-                    tvStatus.setText("后端未启动，点生成自动拉起");
+                    STATUS_TEXT = "后端未启动，点生成自动拉起";
                 }
+                tvStatus.setText(STATUS_TEXT);
             });
         });
     }
 
+    // ────────────────────────────────────────────────────────
+    // 生成
+    // ────────────────────────────────────────────────────────
     private void doGenerate() {
-        if (busy.get()) { toast("正在生成中"); return; }
+        if (BUSY.get()) { toast("正在生成中"); return; }
 
-        String prompt = etPrompt.getText().toString().trim();
+        final String prompt = etPrompt.getText().toString().trim();
         if (TextUtils.isEmpty(prompt)) { toast("先写 prompt"); return; }
 
         final int size = cfg.size();
-        EngineClient.Request req = new EngineClient.Request();
+        final EngineClient.Request req = new EngineClient.Request();
         req.prompt = prompt;
         req.negative = etNeg.getText().toString().trim();
         req.steps = cfg.steps();
@@ -164,109 +194,149 @@ public class MainActivity extends AppCompatActivity {
         String s = etSeed.getText().toString().trim();
         req.seed = s.isEmpty() ? -1 : parseLong(s, -1);
 
-        busy.set(true);
+        BUSY.set(true);
+        CANCEL_FLAG = false;
+        INDETERMINATE = true;
+        PROGRESS = 0;
+        STATUS_TEXT = "准备中…";
+
         btnStart.setEnabled(false);
         bar.setIndeterminate(true);
         bar.setVisibility(View.VISIBLE);
-        tvStatus.setText("准备中…");
+        tvStatus.setText(STATUS_TEXT);
+
         final long t0 = System.currentTimeMillis();
 
         pool.execute(() -> {
-            // ── 1. 确保后端在跑 ──────────────────────────
+            // ── 1. 确保后端在跑 ──────────────────────
             if (!RootBackend.pingPort()) {
-                ui.post(() -> tvStatus.setText("启动后端…"));
-
+                setStatus("检查 root…");
                 if (!RootBackend.hasRoot()) {
-                    ui.post(() -> { tvStatus.setText("没有 root 权限"); resetUi(); });
+                    fail("没有 root 权限，Lumen 需要 KSU/Magisk");
                     return;
                 }
 
                 if (!RootBackend.isDeployed()) {
-                    ui.post(() -> tvStatus.setText("首次部署后端（约 65 MB）…"));
+                    setStatus("首次部署后端（约 65 MB，20-40 秒）…");
                     String r = RootBackend.deploy(this);
-                    if (!"ok".equals(r)) {
-                        ui.post(() -> { tvStatus.setText("部署失败：" + shorten(r, 70)); resetUi(); });
-                        return;
-                    }
+                    if (!"ok".equals(r)) { fail("部署失败：" + r); return; }
+                    setStatus("部署完成，启动中…");
                 }
 
+                RootBackend.clearLog();
                 RootBackend.start();
 
                 int waited = 0;
                 while (waited < 5 * 60 * 1000) {
-                    if (!busy.get()) { ui.post(this::resetUi); return; }
+                    if (CANCEL_FLAG) { cancelUi(); return; }
                     if (RootBackend.pingPort()) break;
-                    try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
-                    waited += 1200;
+                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                    waited += 1000;
                     final int sec = waited / 1000;
-                    ui.post(() -> tvStatus.setText("后端加载中… " + sec + "s"));
+                    setStatus("后端加载模型… " + sec + "s");
                 }
                 if (!RootBackend.pingPort()) {
-                    String lg = RootBackend.log(5);
-                    ui.post(() -> { tvStatus.setText("启动超时：" + shorten(lg, 70)); resetUi(); });
+                    fail("后端启动超时\n" + shorten(RootBackend.log(6), 200));
                     return;
                 }
             }
 
-            // ── 2. 提交生成 ──────────────────────────────
+            // ── 2. 提交生成 ──────────────────────────
+            INDETERMINATE = false;
             ui.post(() -> {
-                tvStatus.setText("已提交，等待第一步…");
                 bar.setIndeterminate(false);
                 bar.setMax(100);
                 bar.setProgress(0);
             });
+            setStatus("已提交，首步约 100-160 秒…");
 
             EngineClient.generate(req, new EngineClient.Callback() {
                 @Override public void onProgress(int step, int total) {
+                    PROGRESS = total > 0 ? step * 100 / total : 0;
+                    long el = (System.currentTimeMillis() - t0) / 1000;
+                    STATUS_TEXT = "第 " + step + "/" + total + " 步 · " + el + "s";
                     ui.post(() -> {
-                        bar.setProgress(total > 0 ? step * 100 / total : 0);
-                        long el = (System.currentTimeMillis() - t0) / 1000;
-                        tvStatus.setText("第 " + step + "/" + total + " 步 · " + el + "s");
+                        bar.setProgress(PROGRESS);
+                        tvStatus.setText(STATUS_TEXT);
                     });
                 }
+
                 @Override public void onPreview(Bitmap bmp) {
-                    ui.post(() -> ivImage.setImageBitmap(bmp));
-                }
-                @Override public void onImage(Bitmap bmp, long totalMs, long firstMs) {
-                    lastBitmap = bmp;
+                    CURRENT_BMP = bmp;
                     ui.post(() -> {
                         ivImage.setImageBitmap(bmp);
-                        tvStatus.setText(String.format(Locale.US,
-                                "完成 · 总 %d 秒 · 首步 %.1f 秒",
-                                totalMs / 1000, firstMs / 1000.0));
-                        bar.setProgress(100);
-                        resetUi();
+                        if (ivPlaceholder != null) ivPlaceholder.setVisibility(View.GONE);
                     });
                 }
-                @Override public void onError(String msg) {
+
+                @Override public void onImage(Bitmap bmp, long totalMs, long firstMs) {
+                    CURRENT_BMP = bmp;
+                    STATUS_TEXT = String.format(Locale.US,
+                            "完成 · %d 秒（首步 %.1f 秒）",
+                            totalMs / 1000, firstMs / 1000.0);
                     ui.post(() -> {
-                        tvStatus.setText("失败：" + shorten(msg, 90));
-                        resetUi();
+                        ivImage.setImageBitmap(bmp);
+                        if (ivPlaceholder != null) ivPlaceholder.setVisibility(View.GONE);
+                        tvStatus.setText(STATUS_TEXT);
+                        bar.setProgress(100);
+                        finishRun();
                     });
                 }
-            });
+
+                @Override public void onError(String msg) {
+                    fail(msg);
+                }
+            }, () -> CANCEL_FLAG);
         });
     }
 
-    private void resetUi() {
-        busy.set(false);
-        btnStart.setEnabled(true);
-        bar.setVisibility(View.GONE);
+    private void setStatus(String s) {
+        STATUS_TEXT = s;
+        ui.post(() -> tvStatus.setText(s));
     }
 
+    private void fail(String msg) {
+        STATUS_TEXT = "失败：" + shorten(msg, 160);
+        Log.e(TAG, "生成失败: " + msg);
+        ui.post(() -> {
+            tvStatus.setText(STATUS_TEXT);
+            finishRun();
+            toast("生成失败，详情看状态栏");
+        });
+    }
+
+    private void cancelUi() {
+        STATUS_TEXT = "已取消";
+        ui.post(() -> {
+            tvStatus.setText("已取消");
+            finishRun();
+        });
+    }
+
+    private void finishRun() {
+        BUSY.set(false);
+        ui.post(() -> {
+            btnStart.setEnabled(true);
+            bar.setVisibility(View.GONE);
+        });
+    }
+
+    // ────────────────────────────────────────────────────────
+    // 图片
+    // ────────────────────────────────────────────────────────
     private void saveImage() {
-        if (lastBitmap == null) { toast("还没有图"); return; }
+        if (CURRENT_BMP == null) { toast("还没有图"); return; }
         try {
             File dir = new File(Environment.getExternalStoragePublicDirectory(
                     Environment.DIRECTORY_PICTURES), "Lumen");
-            if (!dir.exists()) dir.mkdirs();
+            if (!dir.exists() && !dir.mkdirs()) { toast("无法创建目录"); return; }
             String name = "lumen_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
                     .format(new Date()) + ".png";
             File f = new File(dir, name);
             try (FileOutputStream fos = new FileOutputStream(f)) {
-                lastBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                CURRENT_BMP.compress(Bitmap.CompressFormat.PNG, 100, fos);
             }
-            toast("已保存 " + f.getAbsolutePath());
+            toast("已保存 " + f.getName());
             sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f)));
         } catch (Exception e) {
             toast("保存失败：" + e.getMessage());
@@ -277,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             File f = new File(getCacheDir(), "view.png");
             try (FileOutputStream fos = new FileOutputStream(f)) {
-                lastBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                CURRENT_BMP.compress(Bitmap.CompressFormat.PNG, 100, fos);
             }
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(Uri.fromFile(f), "image/png");
@@ -286,13 +356,12 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { toast("打不开"); }
     }
 
+    // ────────────────────────────────────────────────────────
     private void requestPerms() {
         java.util.List<String> need = new java.util.ArrayList<>();
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.POST_NOTIFICATIONS);
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES)
-                    != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.READ_MEDIA_IMAGES);
         } else {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
@@ -314,8 +383,6 @@ public class MainActivity extends AppCompatActivity {
         out.putString(K_PROMPT, etPrompt.getText().toString());
         out.putString(K_NEG, etNeg.getText().toString());
         out.putString(K_SEED, etSeed.getText().toString());
-        out.putString(K_STATUS, tvStatus.getText().toString());
-        out.putBoolean(K_BUSY, busy.get());
     }
 
     @Override
@@ -325,15 +392,10 @@ public class MainActivity extends AppCompatActivity {
         etPrompt.setText(in.getString(K_PROMPT, ""));
         etNeg.setText(in.getString(K_NEG, ""));
         etSeed.setText(in.getString(K_SEED, ""));
-        tvStatus.setText(in.getString(K_STATUS, ""));
-        if (in.getBoolean(K_BUSY, false)) {
-            busy.set(true);
-            btnStart.setEnabled(false);
-            bar.setVisibility(View.VISIBLE);
-        }
     }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+
     private static String shorten(String s, int n) {
         if (s == null) return "";
         return s.length() <= n ? s : s.substring(0, n) + "…";

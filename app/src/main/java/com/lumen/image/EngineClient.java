@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.util.Base64;
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -13,42 +14,25 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * 跟后端 8189 说话。
- * /generate 返回 SSE：progress 事件若干，最后 complete 事件里带 base64 原始 RGB。
+ * 跟 root 后端（127.0.0.1:8189）说话。
+ * /generate 走 SSE：progress 若干 + 最后一次 complete，complete 里带 base64 原始 RGB。
  */
 public class EngineClient {
 
     private static final String TAG = "LumenEngine";
+    public static final int PORT = 8189;
+    public static final String BASE = "http://127.0.0.1:" + PORT;
 
-    public static final String BASE = "http://127.0.0.1:" + BackendService.PORT;
+    /** 取消标志 —— 停止按钮置 true，读流时就会中断 */
+    public interface Ctl { boolean cancelled(); }
 
-    // ─── 回调 ────────────────────────────────────────────────
     public interface Callback {
-        /** 每步进度 */
         void onProgress(int step, int total);
-        /** 出图（已转成 Bitmap） */
         void onImage(Bitmap bmp, long totalMs, long firstStepMs);
-        /** 中间预览（可选，帧尺寸可能很小） */
         void onPreview(Bitmap bmp);
         void onError(String msg);
-    }
-
-    // ─── 健康检查 ─────────────────────────────────────────────
-    public static boolean ping() {
-        try {
-            HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/health").openConnection();
-            c.setConnectTimeout(1200);
-            c.setReadTimeout(1500);
-            int code = c.getResponseCode();
-            c.disconnect();
-            return code == 200;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     // ─── 请求体 ──────────────────────────────────────────────
@@ -60,7 +44,7 @@ public class EngineClient {
         public long seed = -1;
         public int width = 512;
         public int height = 512;
-        public String loraPath;      // 可为 null
+        public String loraPath;
         public float loraStrength = 1.0f;
 
         public String toJson() {
@@ -74,12 +58,12 @@ public class EngineClient {
                 o.put("width", width);
                 o.put("height", height);
                 if (loraPath != null && !loraPath.isEmpty()) {
-                    org.json.JSONArray arr = new org.json.JSONArray();
+                    JSONArray arr = new JSONArray();
                     JSONObject l = new JSONObject();
                     l.put("path", loraPath);
                     l.put("strength", loraStrength);
                     arr.put(l);
-                    o.put("loras", arr);   // ← 复数，单数会被静默忽略
+                    o.put("loras", arr);   // 复数！单数会被静默忽略
                 }
                 return o.toString();
             } catch (Exception e) {
@@ -89,15 +73,14 @@ public class EngineClient {
     }
 
     // ─── 主流程（阻塞，必须放子线程）───────────────────────────
-    public static void generate(Request req, Callback cb) {
+    public static void generate(Request req, Callback cb, Ctl ctl) {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(BASE + "/generate").openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(10_000);
-            // 生成一张可能要 8 分钟，读超时给足
-            conn.setReadTimeout(15 * 60 * 1000);
+            conn.setReadTimeout(20 * 60 * 1000);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             conn.setRequestProperty("Accept", "text/event-stream");
             conn.setRequestProperty("Cache-Control", "no-cache");
@@ -110,23 +93,23 @@ public class EngineClient {
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                String err = readAll(conn.getErrorStream());
-                cb.onError("HTTP " + code + " " + err);
+                cb.onError("HTTP " + code + " " + readAll(conn.getErrorStream()));
                 return;
             }
 
-            // ─── 读 SSE ────────────────────────────────────
             String event = null;
             StringBuilder data = new StringBuilder();
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = br.readLine()) != null) {
+                    if (ctl != null && ctl.cancelled()) {
+                        Log.i(TAG, "用户取消，断开");
+                        return;
+                    }
                     if (line.isEmpty()) {
-                        // 事件结束
                         if (event != null && data.length() > 0) {
-                            boolean stop = handleEvent(event, data.toString(), cb);
-                            if (stop) return;
+                            if (handleEvent(event, data.toString(), cb)) return;
                         }
                         event = null;
                         data.setLength(0);
@@ -138,10 +121,7 @@ public class EngineClient {
                         data.append(line.substring(5).trim());
                     }
                 }
-                // 末尾没空行的情况
-                if (event != null && data.length() > 0) {
-                    handleEvent(event, data.toString(), cb);
-                }
+                if (event != null && data.length() > 0) handleEvent(event, data.toString(), cb);
             }
         } catch (Exception e) {
             Log.e(TAG, "generate 失败", e);
@@ -151,82 +131,75 @@ public class EngineClient {
         }
     }
 
-    /** @return true 表示已经 complete，可以停 */
+    /** @return true = 收到 complete，可以停 */
     private static boolean handleEvent(String event, String json, Callback cb) {
         try {
             JSONObject o = new JSONObject(json);
 
-            switch (event) {
-                case "progress": {
-                    int step = o.optInt("step", 0);
-                    int total = o.optInt("total_steps", 5);
+            if ("progress".equals(event)) {
+                int step = o.optInt("step", 0);
+                int total = o.optInt("total_steps", 5);
 
-                    // 有些版本会在 progress 里塞预览图
-                    String pv = o.optString("image", "");
-                    if (pv != null && !pv.isEmpty()) {
-                        Bitmap pb = decodeRaw(pv,
-                                o.optInt("width", 0), o.optInt("height", 0),
-                                o.optInt("channels", 0));
-                        if (pb != null) cb.onPreview(pb);
-                    }
-                    cb.onProgress(step, total);
-                    return false;
+                String pv = o.optString("image", "");
+                if (pv != null && !pv.isEmpty()) {
+                    Bitmap pb = decodeRaw(pv,
+                            o.optInt("width", 0), o.optInt("height", 0),
+                            o.optInt("channels", 0));
+                    if (pb != null) cb.onPreview(pb);
                 }
-                case "complete": {
-                    String b64 = o.optString("image", "");
-                    int w = o.optInt("width", 512);
-                    int h = o.optInt("height", 512);
-                    int ch = o.optInt("channels", 3);
-                    long total = o.optLong("generation_time_ms", 0);
-                    long first = o.optLong("first_step_time_ms", 0);
-
-                    Bitmap bmp = decodeRaw(b64, w, h, ch);
-                    if (bmp == null) {
-                        cb.onError("解码失败 (w=" + w + " h=" + h + " ch=" + ch
-                                + " b64len=" + b64.length() + ")");
-                    } else {
-                        cb.onImage(bmp, total, first);
-                    }
-                    return true;
-                }
-                case "error": {
-                    cb.onError(o.optString("message", json));
-                    return true;
-                }
-                default:
-                    Log.w(TAG, "未知事件 " + event);
-                    return false;
+                cb.onProgress(step, total);
+                return false;
             }
+
+            if ("complete".equals(event)) {
+                String b64 = o.optString("image", "");
+                int w = o.optInt("width", 512);
+                int h = o.optInt("height", 512);
+                int ch = o.optInt("channels", 3);
+                long total = o.optLong("generation_time_ms", 0);
+                long first = o.optLong("first_step_time_ms", 0);
+
+                Bitmap bmp = decodeRaw(b64, w, h, ch);
+                if (bmp == null) {
+                    cb.onError("解码失败 w=" + w + " h=" + h + " ch=" + ch
+                            + " b64=" + b64.length());
+                } else {
+                    cb.onImage(bmp, total, first);
+                }
+                return true;
+            }
+
+            if ("error".equals(event)) {
+                cb.onError(o.optString("message", json));
+                return true;
+            }
+
+            Log.w(TAG, "未知事件: " + event);
+            return false;
         } catch (Exception e) {
-            Log.e(TAG, "解析事件失败: " + json.substring(0, Math.min(200, json.length())), e);
+            Log.e(TAG, "解析失败", e);
             return false;
         }
     }
 
     /**
      * base64 → 原始像素 → Bitmap。
-     * 后端给的是 RGB 交织（format:"raw"），每像素 channels 字节，无行填充。
-     * 之前验证过：不需要交换通道。
+     * 后端给的是 RGB 交织（format=raw），无行填充。已验证不需要换通道。
      */
     public static Bitmap decodeRaw(String b64, int w, int h, int ch) {
         if (b64 == null || b64.isEmpty() || w <= 0 || h <= 0) return null;
         try {
             byte[] raw = Base64.decode(b64, Base64.DEFAULT);
-            long expect3 = (long) w * h * 3;
-            long expect4 = (long) w * h * 4;
-
+            long e3 = (long) w * h * 3, e4 = (long) w * h * 4;
             if (ch <= 0) {
-                if (raw.length == expect3) ch = 3;
-                else if (raw.length == expect4) ch = 4;
+                if (raw.length == e3) ch = 3;
+                else if (raw.length == e4) ch = 4;
                 else return null;
             }
-
-            long need = (long) w * h * ch;
-            if (raw.length < need) {
-                Log.e(TAG, "像素不足: " + raw.length + " < " + need);
+            if (raw.length < (long) w * h * ch) {
+                Log.e(TAG, "像素不足 " + raw.length + " < " + (long) w * h * ch);
                 return null;
             }
-
             int[] px = new int[w * h];
             int p = 0;
             for (int i = 0; i < px.length; i++) {
@@ -245,7 +218,8 @@ public class EngineClient {
 
     private static String readAll(InputStream in) {
         if (in == null) return "";
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(in, StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
             String l;
             while ((l = r.readLine()) != null) sb.append(l).append('\n');

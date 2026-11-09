@@ -50,6 +50,66 @@
             android:textColor="#7A9A88"
             android:textSize="11sp" />
 
+        <!-- 后端管理 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="root 后端"
+            android:textColor="#8A8AA0"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/tv_backend_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#101018"
+            android:fontFamily="monospace"
+            android:padding="10dp"
+            android:text=""
+            android:textColor="#88AABB"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_be_start"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="启动"
+                android:textSize="12sp"
+                android:backgroundTint="#2A3A32"
+                android:textColor="#88DDB0" />
+
+            <Button
+                android:id="@+id/btn_be_stop"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:text="停止"
+                android:textSize="12sp"
+                android:backgroundTint="#2A2A32"
+                android:textColor="#B0B0C0" />
+
+            <Button
+                android:id="@+id/btn_be_log"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:text="日志"
+                android:textSize="12sp"
+                android:backgroundTint="#2A2A32"
+                android:textColor="#B0B0C0" />
+        </LinearLayout>
+
         <!-- 后端 -->
         <TextView
             android:layout_width="match_parent"
