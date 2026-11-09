@@ -67,7 +67,8 @@ public class MainActivity extends AppCompatActivity {
     private EditText etPrompt, etNeg, etSeed;
     private Button btnStart, btnStop, btnSave, btnSettings;
     private TextView tvStatus, tvInfo, tvSteps;
-    private ImageView ivImage, ivPlaceholder;
+    private ImageView ivImage;
+    private TextView ivPlaceholder;
     private ProgressBar bar;
     private SeekBar sbSteps;
 
