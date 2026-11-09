@@ -1,12 +1,13 @@
 #!/system/bin/sh
 # ============================================================
-# Lumen 后端启动器（root 运行）
-# 用法: lumen_be.sh start|stop|restart|status|log [n]
+# Lumen 后端启动器（root）
+# 用法: lumen_be.sh start|stop|restart|status|log [n]|setcfg ...
 #
-# 关键点:
-#   oom_score_adj = -1000   LMK 永不回收（这是换 root 的核心收益）
-#   renice -20              调度优先
-#   绑定 top-app cpuset     吃满大核
+# 提速关键（实测）:
+#   taskset 240   只跑 cpu4-7（大核 X2@3.19G + A710@2.75G）
+#                 排除 cpu0-3（A510@2.02G），避免木桶效应
+#   oom_adj -1000 不被 LMK 回收
+#   renice -20    调度优先
 # ============================================================
 
 BIN=/data/adb/lumen
@@ -18,24 +19,18 @@ PIDF=$BIN/backend.pid
 LOGF=$BIN/backend.log
 ENVF=$BIN/backend.env
 
-OOM_ADJ=-1000
-CPU_FREQ_MIN=1
-
-# 默认值（可被 backend.env 覆盖）
+# 默认配置（backend.env 可覆盖）
 NM_DIT_BACKEND_VAL="diffusion=CPU,te=CPU,vae=CPU"
-NM_DIT_THREADS_VAL=8
+NM_DIT_THREADS_VAL=4
+CPU_MASK_VAL=240          # 0xF0 = cpu4-7
+USE_TASKSET=1
 
-# 读取 App 写入的配置
-load_env() {
-    if [ -f "$ENVF" ]; then
-        . "$ENVF"
-    fi
-}
-
+load_env() { [ -f "$ENVF" ] && . "$ENVF"; }
 save_env() {
     {
         echo "NM_DIT_BACKEND_VAL=\"$NM_DIT_BACKEND_VAL\""
         echo "NM_DIT_THREADS_VAL=$NM_DIT_THREADS_VAL"
+        echo "CPU_MASK_VAL=$CPU_MASK_VAL"
     } > "$ENVF"
 }
 
@@ -51,10 +46,9 @@ start() {
         rm -f "$PIDF"
     fi
 
-    # 检查文件
-    [ -x "$CORE" ]   || { echo "ERR: 缺 $CORE";   return 1; }
-    [ -f "$ENGINE" ] || { echo "ERR: 缺 $ENGINE"; return 1; }
-    [ -f "$MODEL/dit.gguf" ] || { echo "ERR: 缺模型 $MODEL/dit.gguf"; return 1; }
+    [ -x "$CORE" ]   || { echo "ERR 缺 $CORE";   return 1; }
+    [ -f "$ENGINE" ] || { echo "ERR 缺 $ENGINE"; return 1; }
+    [ -f "$MODEL/dit.gguf" ] || { echo "ERR 缺模型"; return 1; }
 
     cd "$BIN" || return 1
 
@@ -63,7 +57,13 @@ start() {
     export SD_QWEN35_TOKENIZER="$MODEL/tokenizer.json"
     export NM_DIT_THREADS="$NM_DIT_THREADS_VAL"
 
-    nohup "$CORE" \
+    # 核心：绑大核
+    RUNNER=""
+    if [ "$USE_TASKSET" = "1" ] && command -v taskset >/dev/null 2>&1; then
+        RUNNER="taskset $CPU_MASK_VAL"
+    fi
+
+    nohup $RUNNER "$CORE" \
         --type krea2 \
         --model_dir "$MODEL" \
         --lib_dir "$BIN" \
@@ -75,46 +75,24 @@ start() {
     PID=$!
     echo $PID > "$PIDF"
 
-    # 立刻调优先级（越快越好，模型加载前就设上）
+    # 立刻拉高优先级
     i=0
-    while [ $i -lt 15 ]; do
+    while [ $i -lt 20 ]; do
         if [ -d "/proc/$PID" ]; then
-            echo $OOM_ADJ > /proc/$PID/oom_score_adj 2>/dev/null
+            echo -1000 > /proc/$PID/oom_score_adj 2>/dev/null
             break
         fi
-        i=$((i+1))
-        sleep 0.2
+        i=$((i+1)); sleep 0.15
     done
-
-    # 提到 top-app cpuset（吃大核）
-    if [ -d "/dev/cpuset/top-app/tasks" ]; then
-        echo $PID > /dev/cpuset/top-app/tasks 2>/dev/null
-    fi
-
-    # 调度优先级
+    [ -d "/dev/cpuset/top-app/tasks" ] && echo $PID > /dev/cpuset/top-app/tasks 2>/dev/null
     renice -n -20 -p $PID 2>/dev/null
 
-    # 抬高 CPU 最低频率（避免降频拖慢）
-    if [ "$CPU_FREQ_MIN" = "1" ]; then
-        for c in /sys/devices/system/cpu/cpu[4-7]/cpufreq/scaling_min_freq; do
-            [ -f "$c" ] || continue
-            MAXF=$(cat "${c%scaling_min_freq}cpuinfo_max_freq" 2>/dev/null)
-            [ -n "$MAXF" ] && echo $MAXF > "$c" 2>/dev/null
-        done
-    fi
-
-    echo "已启动 pid=$PID oom_adj=$(cat /proc/$PID/oom_score_adj 2>/dev/null) backend=$NM_DIT_BACKEND_VAL threads=$NM_DIT_THREADS_VAL"
+    echo "启动 pid=$PID oom=$(cat /proc/$PID/oom_score_adj 2>/dev/null) threads=$NM_DIT_THREADS_VAL mask=$CPU_MASK_VAL backend=$NM_DIT_BACKEND_VAL"
 }
 
 stop() {
-    if [ -f "$PIDF" ]; then
-        PID=$(cat "$PIDF" 2>/dev/null)
-        [ -n "$PID" ] && kill -9 "$PID" 2>/dev/null
-        rm -f "$PIDF"
-    fi
-    for p in $(pidof libstable_diffusion_core.so 2>/dev/null); do
-        kill -9 "$p" 2>/dev/null
-    done
+    [ -f "$PIDF" ] && { P=$(cat "$PIDF" 2>/dev/null); [ -n "$P" ] && kill -9 "$P" 2>/dev/null; rm -f "$PIDF"; }
+    for p in $(pidof libstable_diffusion_core.so 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
     echo "已停止"
 }
 
@@ -125,7 +103,7 @@ status() {
             OOM=$(cat /proc/$PID/oom_score_adj 2>/dev/null)
             RSS=$(awk '/VmRSS/{print int($2/1024)}' /proc/$PID/status 2>/dev/null)
             if netstat -tln 2>/dev/null | grep -q ":$PORT "; then P=1; else P=0; fi
-            echo "RUNNING pid=$PID rss=${RSS}MB oom_adj=$OOM port=$P"
+            echo "RUNNING pid=$PID rss=${RSS}MB oom=$OOM port=$P"
             return 0
         fi
     fi
@@ -134,14 +112,15 @@ status() {
 }
 
 setcfg() {
-    # setcfg <cpu|opencl> <threads>
+    # setcfg <cpu|opencl> <threads> <mask>
     case "$2" in
         opencl) NM_DIT_BACKEND_VAL="diffusion=GPUOpenCL,te=CPU,vae=CPU" ;;
         *)      NM_DIT_BACKEND_VAL="diffusion=CPU,te=CPU,vae=CPU" ;;
     esac
     [ -n "$3" ] && NM_DIT_THREADS_VAL=$3
+    [ -n "$4" ] && CPU_MASK_VAL=$4
     save_env
-    echo "配置已保存: backend=$NM_DIT_BACKEND_VAL threads=$NM_DIT_THREADS_VAL（重启生效）"
+    echo "已保存 threads=$NM_DIT_THREADS_VAL mask=$CPU_MASK_VAL backend=$NM_DIT_BACKEND_VAL（重启生效）"
 }
 
 case "$1" in
@@ -151,5 +130,5 @@ case "$1" in
     status)  status ;;
     log)     tail -n "${2:-30}" "$LOGF" 2>/dev/null ;;
     setcfg)  setcfg "$@" ;;
-    *)       echo "用法: $0 start|stop|restart|status|log [n]|setcfg cpu|opencl [threads]" ;;
+    *)       echo "用法: $0 start|stop|restart|status|log [n]|setcfg cpu|opencl [threads] [mask]" ;;
 esac
