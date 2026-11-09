@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0E0E12"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="设置"
+            android:textColor="#E8E8F0"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <!-- 模型目录 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="模型目录"
+            android:textColor="#8A8AA0"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/et_model_dir"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#16161E"
+            android:inputType="text"
+            android:padding="10dp"
+            android:textColor="#E0E0EC"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tv_model_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#101018"
+            android:fontFamily="monospace"
+            android:padding="10dp"
+            android:text=""
+            android:textColor="#7A9A88"
+            android:textSize="11sp" />
+
+        <!-- 后端 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="计算后端"
+            android:textColor="#8A8AA0"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rg_backend"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/rb_cpu"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="#66D9A0"
+                android:text="CPU（已实测可用，约 8 分钟/张）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_opencl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="#66D9A0"
+                android:text="GPU · OpenCL（Adreno 730，未实测）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- 权重存放 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="权重存放"
+            android:textColor="#8A8AA0"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rg_params"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/rb_disk"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="#66D9A0"
+                android:text="磁盘流式（省内存，约 4 GB）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_ram"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="#66D9A0"
+                android:text="全部加载到内存（需 8 GB+ 空闲，可能更快）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- 尺寸 -->
+        <TextView
+            android:id="@+id/tv_size"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="512 × 512"
+            android:textColor="#C0C0D0"
+            android:textSize="13sp" />
+
+        <SeekBar
+            android:id="@+id/sb_size"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:progressTint="#66D9A0"
+            android:thumbTint="#66D9A0" />
+
+        <!-- CFG -->
+        <TextView
+            android:id="@+id/tv_cfg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="CFG 1.0"
+            android:textColor="#C0C0D0"
+            android:textSize="13sp" />
+
+        <SeekBar
+            android:id="@+id/sb_cfg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:progressTint="#66D9A0"
+            android:thumbTint="#66D9A0" />
+
+        <!-- LoRA -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="启用 DMD LoRA（画质关键）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/sw_lora"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tv_lora"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="1.00"
+            android:textColor="#C0C0D0"
+            android:textSize="13sp" />
+
+        <SeekBar
+            android:id="@+id/sb_lora"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:progressTint="#66D9A0"
+            android:thumbTint="#66D9A0" />
+
+        <!-- 监听 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="允许局域网访问（给电脑用）"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/sw_listen"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_save_settings"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="20dp"
+            android:text="保存"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:backgroundTint="#66D9A0"
+            android:textColor="#0E0E12" />
+
+    </LinearLayout>
+</ScrollView>

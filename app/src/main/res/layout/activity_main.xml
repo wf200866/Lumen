@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0E0E12"
+    android:padding="12dp">
+
+    <!-- 顶栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Lumen"
+            android:textColor="#E8E8F0"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CPU · 512×512"
+            android:textColor="#7A7A90"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btn_settings"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="设置"
+            android:textSize="12sp"
+            android:backgroundTint="#22222C"
+            android:textColor="#B0B0C0" />
+    </LinearLayout>
+
+    <!-- 状态条 -->
+    <TextView
+        android:id="@+id/tv_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="引擎未启动"
+        android:textColor="#66D9A0"
+        android:textSize="12sp"
+        android:maxLines="2"
+        android:ellipsize="end" />
+
+    <ProgressBar
+        android:id="@+id/pbar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_marginTop="6dp"
+        android:visibility="gone"
+        android:progressTint="#66D9A0" />
+
+    <!-- 图片区 -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="10dp"
+        android:background="#16161E">
+
+        <ImageView
+            android:id="@+id/iv_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:contentDescription="生成结果" />
+
+        <TextView
+            android:id="@+id/tv_placeholder"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="还没有图"
+            android:textColor="#3A3A48"
+            android:textSize="14sp" />
+    </FrameLayout>
+
+    <!-- 图片操作 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/btn_save"
+            android:layout_width="0dp"
+            android:layout_height="42dp"
+            android:layout_weight="1"
+            android:text="保存到相册"
+            android:textSize="13sp"
+            android:backgroundTint="#22222C"
+            android:textColor="#B0B0C0" />
+
+        <Button
+            android:id="@+id/btn_stop"
+            android:layout_width="0dp"
+            android:layout_height="42dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:text="停止"
+            android:textSize="13sp"
+            android:backgroundTint="#22222C"
+            android:textColor="#B0B0C0" />
+    </LinearLayout>
+
+    <!-- Prompt -->
+    <EditText
+        android:id="@+id/et_prompt"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_marginTop="8dp"
+        android:background="#16161E"
+        android:gravity="top|start"
+        android:hint="描述你想要的画面…"
+        android:inputType="textMultiLine|textCapSentences"
+        android:padding="10dp"
+        android:textColor="#E0E0EC"
+        android:textColorHint="#4A4A5A"
+        android:textSize="14sp" />
+
+    <!-- 负向 -->
+    <EditText
+        android:id="@+id/et_neg"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginTop="6dp"
+        android:background="#16161E"
+        android:hint="不要出现（负向提示词）"
+        android:inputType="text"
+        android:padding="10dp"
+        android:textColor="#E0E0EC"
+        android:textColorHint="#4A4A5A"
+        android:textSize="12sp" />
+
+    <!-- 步数 + seed -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:id="@+id/tv_steps"
+            android:layout_width="48dp"
+            android:layout_height="wrap_content"
+            android:text="4 步"
+            android:textColor="#8A8AA0"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/sb_steps"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:progressTint="#66D9A0"
+            android:thumbTint="#66D9A0" />
+
+        <EditText
+            android:id="@+id/et_seed"
+            android:layout_width="80dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:background="#16161E"
+            android:hint="seed"
+            android:inputType="number"
+            android:padding="6dp"
+            android:textSize="12sp"
+            android:textColor="#E0E0EC"
+            android:textColorHint="#4A4A5A" />
+    </LinearLayout>
+
+    <!-- 生成 -->
+    <Button
+        android:id="@+id/btn_start"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="8dp"
+        android:text="生成"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:backgroundTint="#66D9A0"
+        android:textColor="#0E0E12" />
+
+</LinearLayout>
