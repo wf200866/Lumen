@@ -59,6 +59,14 @@ public class MainActivity extends AppCompatActivity {
     private Bitmap lastBitmap;
     private volatile long lastMs = 0, lastFirstMs = 0;
 
+    // ── 跨 Activity 重建保留的状态 ─────────────────────
+    private static final String K_PROMPT = "v_prompt";
+    private static final String K_NEG    = "v_neg";
+    private static final String K_SEED   = "v_seed";
+    private static final String K_STATUS = "v_status";
+    private static final String K_BUSY   = "v_busy";
+    private static final String K_PHASE  = "v_phase";
+
     private final BroadcastReceiver stateRx = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
             String s = i.getStringExtra(BackendService.EXTRA_STATE);
@@ -334,9 +342,37 @@ public class MainActivity extends AppCompatActivity {
         try { return Long.parseLong(s.trim()); } catch (Exception e) { return def; }
     }
 
-    @Override protected void onDestroy() {
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putString(K_PROMPT, etPrompt.getText().toString());
+        out.putString(K_NEG, etNeg.getText().toString());
+        out.putString(K_SEED, etSeed.getText().toString());
+        out.putString(K_STATUS, tvStatus.getText().toString());
+        out.putBoolean(K_BUSY, busy.get());
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Bundle in) {
+        super.onRestoreInstanceState(in);
+        if (in == null) return;
+        etPrompt.setText(in.getString(K_PROMPT, ""));
+        etNeg.setText(in.getString(K_NEG, ""));
+        etSeed.setText(in.getString(K_SEED, ""));
+        tvStatus.setText(in.getString(K_STATUS, "引擎未启动"));
+        boolean wasBusy = in.getBoolean(K_BUSY, false);
+        if (wasBusy) {
+            busy.set(true);
+            btnStart.setEnabled(false);
+            bar.setVisibility(View.VISIBLE);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
         try { unregisterReceiver(stateRx); } catch (Exception ignored) {}
         BackendService.setLogSink(null);
+        // 注意：不停止 Service，让它继续跑
         super.onDestroy();
     }
 }
