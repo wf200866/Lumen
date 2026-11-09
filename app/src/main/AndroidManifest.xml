@@ -41,10 +41,5 @@
             android:exported="false"
             android:parentActivityName=".MainActivity" />
 
-        <service
-            android:name=".BackendService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
     </application>
 </manifest>
