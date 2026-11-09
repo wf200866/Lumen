@@ -20,47 +20,82 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub 的 ubuntu-latest runner 自带 Android SDK，直接用，不装额外包
+      - name: Locate Android SDK
+        run: |
+          if [ -z "$ANDROID_HOME" ]; then
+            if [ -d /usr/local/lib/android/sdk ]; then
+              echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+            elif [ -d "$HOME/Android/Sdk" ]; then
+              echo "ANDROID_HOME=$HOME/Android/Sdk" >> $GITHUB_ENV
+            fi
+          fi
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls $ANDROID_HOME || true
+          echo "=== platforms ==="
+          ls $ANDROID_HOME/platforms 2>/dev/null || echo "(无)"
+          echo "=== build-tools ==="
+          ls $ANDROID_HOME/build-tools 2>/dev/null || echo "(无)"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
+      - name: Accept licenses & ensure SDK components
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$SDK"
+          export ANDROID_SDK_ROOT="$SDK"
+          echo "ANDROID_HOME=$SDK" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$SDK" >> $GITHUB_ENV
+
+          SDKMGR=$(find $SDK -name sdkmanager -type f 2>/dev/null | head -1)
+          echo "sdkmanager: $SDKMGR"
+          if [ -n "$SDKMGR" ]; then
+            yes | $SDKMGR --licenses > /dev/null 2>&1 || true
+            # 只在缺的时候装，避免触发 tools 包问题
+            [ -d "$SDK/platforms/android-34" ] || $SDKMGR "platforms;android-34" || true
+            [ -d "$SDK/build-tools/34.0.0" ] || $SDKMGR "build-tools;34.0.0" || true
+          fi
+          ls $SDK/platforms
+          ls $SDK/build-tools
+
       - name: Restore keystore
         run: |
           if [ -f keystore.jks.b64 ]; then
             base64 -d keystore.jks.b64 > keystore.jks
-            echo "✅ keystore 已还原"
+            echo "✅ keystore 已还原 ($(stat -c %s keystore.jks) 字节)"
           else
-            echo "⚠️ 没有 keystore.jks.b64，生成临时签名"
             keytool -genkeypair -v -keystore keystore.jks \
               -alias lumen -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass lumen2026 -keypass lumen2026 \
               -dname "CN=Lumen, OU=Dev, O=Lumen, L=NA, S=NA, C=CN"
           fi
-          ls -lh keystore.jks
 
-      - name: Check native libs
+      - name: Check project files
         run: |
           echo "=== jniLibs ==="
-          ls -lh app/src/main/jniLibs/arm64-v8a/ || echo "(空)"
+          ls -lh app/src/main/jniLibs/arm64-v8a/
           echo "=== assets ==="
-          ls -lh app/src/main/assets/ || echo "(空)"
+          ls -lh app/src/main/assets/
+          echo "=== java ==="
+          find app/src/main/java -name '*.java' | sort
 
       - name: Build Release APK
         run: |
-          gradle :app:assembleRelease --no-daemon --stacktrace --info
+          gradle :app:assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK
         run: |
-          ls -lh app/build/outputs/apk/release/
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
           echo "APK: $APK"
-          $ANDROID_HOME/build-tools/34.0.0/aapt2 dump badging "$APK" | head -20 || true
+          ls -lh "$APK"
           echo "=== 内含 so ==="
           unzip -l "$APK" | grep -E '\.so|assets/' | head -20
+          echo "=== 签名 ==="
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | head -1)
+          [ -n "$APKSIGNER" ] && $APKSIGNER verify --print-certs "$APK" | head -5 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -69,12 +104,12 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
 
-      - name: Upload mapping
-        if: always()
+      - name: Upload build log
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
+          name: build-failure-log
           path: |
-            app/build/outputs/logs/
+            app/build/reports/
           retention-days: 7
           if-no-files-found: ignore
