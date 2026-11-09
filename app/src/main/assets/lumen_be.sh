@@ -1,13 +1,17 @@
 #!/system/bin/sh
 # ============================================================
 # Lumen 后端启动器（root）
-# 用法: lumen_be.sh start|stop|restart|status|log [n]|setcfg ...
+# 用法: lumen_be.sh start|stop|restart|status|log [n]|setcfg cpu|opencl [threads]
 #
-# 提速关键（实测）:
-#   taskset 240   只跑 cpu4-7（大核 X2@3.19G + A710@2.75G）
-#                 排除 cpu0-3（A510@2.02G），避免木桶效应
-#   oom_adj -1000 不被 LMK 回收
-#   renice -20    调度优先
+# ⚠ 重要教训:
+#   taskset 绑核会导致 ggml 多线程屏障死锁（只有 1 个线程在跑）
+#   → 已彻底移除，绝不绑核
+#
+# 实际有效的手段:
+#   oom_score_adj=-1000   LMK 不回收
+#   renice -20            调度优先
+#   NM_DIT_THREADS=8      吃满八核（实测混跑反而正常）
+#   抬高小核最低频率       避免降频拖慢同步
 # ============================================================
 
 BIN=/data/adb/lumen
@@ -19,18 +23,14 @@ PIDF=$BIN/backend.pid
 LOGF=$BIN/backend.log
 ENVF=$BIN/backend.env
 
-# 默认配置（backend.env 可覆盖）
 NM_DIT_BACKEND_VAL="diffusion=CPU,te=CPU,vae=CPU"
-NM_DIT_THREADS_VAL=4
-CPU_MASK_VAL=240          # 0xF0 = cpu4-7
-USE_TASKSET=1
+NM_DIT_THREADS_VAL=8
 
 load_env() { [ -f "$ENVF" ] && . "$ENVF"; }
 save_env() {
     {
         echo "NM_DIT_BACKEND_VAL=\"$NM_DIT_BACKEND_VAL\""
         echo "NM_DIT_THREADS_VAL=$NM_DIT_THREADS_VAL"
-        echo "CPU_MASK_VAL=$CPU_MASK_VAL"
     } > "$ENVF"
 }
 
@@ -57,13 +57,15 @@ start() {
     export SD_QWEN35_TOKENIZER="$MODEL/tokenizer.json"
     export NM_DIT_THREADS="$NM_DIT_THREADS_VAL"
 
-    # 核心：绑大核
-    RUNNER=""
-    if [ "$USE_TASKSET" = "1" ] && command -v taskset >/dev/null 2>&1; then
-        RUNNER="taskset $CPU_MASK_VAL"
-    fi
+    # 抬高所有核心的最低频率，减少同步等待（不绑核！）
+    for c in /sys/devices/system/cpu/cpu[0-7]/cpufreq/scaling_min_freq; do
+        [ -f "$c" ] || continue
+        base=$(dirname $c)
+        maxf=$(cat $base/cpuinfo_max_freq 2>/dev/null)
+        [ -n "$maxf" ] && echo $maxf > "$c" 2>/dev/null
+    done
 
-    nohup $RUNNER "$CORE" \
+    nohup "$CORE" \
         --type krea2 \
         --model_dir "$MODEL" \
         --lib_dir "$BIN" \
@@ -75,7 +77,6 @@ start() {
     PID=$!
     echo $PID > "$PIDF"
 
-    # 立刻拉高优先级
     i=0
     while [ $i -lt 20 ]; do
         if [ -d "/proc/$PID" ]; then
@@ -84,10 +85,9 @@ start() {
         fi
         i=$((i+1)); sleep 0.15
     done
-    [ -d "/dev/cpuset/top-app/tasks" ] && echo $PID > /dev/cpuset/top-app/tasks 2>/dev/null
     renice -n -20 -p $PID 2>/dev/null
 
-    echo "启动 pid=$PID oom=$(cat /proc/$PID/oom_score_adj 2>/dev/null) threads=$NM_DIT_THREADS_VAL mask=$CPU_MASK_VAL backend=$NM_DIT_BACKEND_VAL"
+    echo "启动 pid=$PID oom=$(cat /proc/$PID/oom_score_adj 2>/dev/null) threads=$NM_DIT_THREADS_VAL backend=$NM_DIT_BACKEND_VAL"
 }
 
 stop() {
@@ -112,15 +112,13 @@ status() {
 }
 
 setcfg() {
-    # setcfg <cpu|opencl> <threads> <mask>
     case "$2" in
         opencl) NM_DIT_BACKEND_VAL="diffusion=GPUOpenCL,te=CPU,vae=CPU" ;;
         *)      NM_DIT_BACKEND_VAL="diffusion=CPU,te=CPU,vae=CPU" ;;
     esac
     [ -n "$3" ] && NM_DIT_THREADS_VAL=$3
-    [ -n "$4" ] && CPU_MASK_VAL=$4
     save_env
-    echo "已保存 threads=$NM_DIT_THREADS_VAL mask=$CPU_MASK_VAL backend=$NM_DIT_BACKEND_VAL（重启生效）"
+    echo "已保存 threads=$NM_DIT_THREADS_VAL backend=$NM_DIT_BACKEND_VAL（重启生效）"
 }
 
 case "$1" in
@@ -130,5 +128,5 @@ case "$1" in
     status)  status ;;
     log)     tail -n "${2:-30}" "$LOGF" 2>/dev/null ;;
     setcfg)  setcfg "$@" ;;
-    *)       echo "用法: $0 start|stop|restart|status|log [n]|setcfg cpu|opencl [threads] [mask]" ;;
+    *)       echo "用法: $0 start|stop|restart|status|log [n]|setcfg cpu|opencl [threads]" ;;
 esac
