@@ -38,6 +38,8 @@ public class BackendService extends Service {
     private Thread reader;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private PowerManager.WakeLock wakeLock;
+    private Config cfg;
+    private boolean cfgListenAll = false;
 
     /** 日志回调，MainActivity 挂上来就能实时看 */
     public interface LogSink { void onLine(String line); }
@@ -135,6 +137,9 @@ public class BackendService extends Service {
         portReady = false;
         publish("starting");
 
+        cfg = new Config(getApplicationContext());
+        cfgListenAll = cfg.listenAll();
+
         File logFile = new File(getExternalFilesDir(null), "backend.log");
 
         new Thread(() -> {
@@ -164,9 +169,11 @@ public class BackendService extends Service {
                 cmd.add(core.getAbsolutePath());
                 cmd.add("--type");              cmd.add("krea2");
                 cmd.add("--model_dir");         cmd.add(modelDir.getAbsolutePath());
+                cmd.add("--lib_dir");           cmd.add(nativeDir);
                 cmd.add("--port");              cmd.add(String.valueOf(PORT));
-                cmd.add("--dit_params_backend"); cmd.add("all=disk");
-                cmd.add("--listen_all");
+                cmd.add("--dit_params_backend");
+                cmd.add("ram".equals(cfg.paramsMode()) ? "all=ram" : "all=disk");
+                if (cfgListenAll) cmd.add("--listen_all");
                 cmd.add("--log_level");         cmd.add("2");
 
                 ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -175,7 +182,9 @@ public class BackendService extends Service {
                 pb.environment().put("LD_LIBRARY_PATH", nativeDir);
                 pb.environment().put("ANDROID_DATA", "/data");
                 pb.environment().put("ANDROID_ROOT", "/system");
-                pb.environment().put("NM_DIT_BACKEND", "diffusion=CPU,te=CPU,vae=CPU");
+                pb.environment().put("NM_DIT_BACKEND", cfg.isGpu()
+                        ? "diffusion=GPUOpenCL,te=CPU,vae=CPU"
+                        : "diffusion=CPU,te=CPU,vae=CPU");
                 pb.environment().put("SD_QWEN35_TOKENIZER", tok.getAbsolutePath());
                 // 线程数：大核全用
                 int cores = Runtime.getRuntime().availableProcessors();

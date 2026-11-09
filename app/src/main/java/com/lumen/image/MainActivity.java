@@ -142,6 +142,8 @@ public class MainActivity extends AppCompatActivity {
         } else {
             updateBackendUi(BackendService.getState());
         }
+        // 回到前台时恢复按钮（防止卡在禁用态）
+        if (!busy.get()) btnStart.setEnabled(true);
     }
 
     private void updateBackendUi(String state) {
@@ -253,6 +255,11 @@ public class MainActivity extends AppCompatActivity {
         busy.set(false);
         btnStart.setEnabled(true);
         bar.setVisibility(View.GONE);
+    }
+
+    /** 启动阶段：只禁用按钮，不动 busy */
+    private void lockGenerate() {
+        btnStart.setEnabled(false);
     }
 
     private void saveImage() {
