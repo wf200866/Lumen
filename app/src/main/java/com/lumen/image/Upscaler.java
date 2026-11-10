@@ -112,44 +112,67 @@ public final class Upscaler {
         return (float) (A * Math.sin(px) * Math.sin(px / A) / (px * px));
     }
 
-    /** 为每个输出像素算 (2*LOBES) 个权重，归一化 */
+    /**
+     * 为每个输出像素算 (2*LOBES) 个权重，归一化。
+     *
+     * 坐标约定：源图像像素 i 的中心在浮点坐标 i，
+     * 输出像素 j 的中心在 (j + 0.5) * scale - 0.5，
+     * 采样点 k 对应源像素 first + k，first = floor(center) - LOBES + 1。
+     *
+     * 【修复记录】原实现：
+     *     xx = center + (k - LOBES + 0.5f) * max(1, scale)
+     *     w  = lanczos((center - xx) / max(1, scale))
+     * 2 倍放大时 scale=0.5、max(1,scale)=1，代入得 w = lanczos(k - 2.5),
+     * 与 i 完全无关 —— 每个输出像素都用同一组权重，等于没做位置相关的重采样。
+     * 现在改为以 center 为基准算每个采样点的距离，并把 first 存进表尾供索引表复用。
+     */
     private static float[] buildWeights(int srcLen, int dstLen) {
         float scale = (float) srcLen / dstLen;
-        float support = A * Math.max(1f, scale);   // 缩小要扩大支持域（抗锯齿）
+        float fscale = Math.max(1f, scale);   // 缩小时才扩散支持域
         int taps = 2 * LOBES;
 
         float[] out = new float[dstLen * (taps + 2)];
         for (int i = 0; i < dstLen; i++) {
             float center = (i + 0.5f) * scale - 0.5f;
             int base = i * (taps + 2);
+            int first = (int) Math.floor(center) - LOBES + 1;
             float sum = 0f;
+
             for (int k = 0; k < taps; k++) {
-                float xx = center + (k - LOBES + 0.5f) * Math.max(1f, scale);
-                float w = lanczos((center - xx) / Math.max(1f, scale));
+                int sx = first + k;
+                float d = (center - sx) / fscale;
+                float w = lanczos(d);
                 out[base + k] = w;
                 sum += w;
             }
-            if (Math.abs(sum) < 1e-6f) { out[base] = 1f; sum = 1f; }
-            for (int k = 0; k < taps; k++) out[base + k] /= sum;
-            // 记录 center 供索引表使用
-            out[base + taps] = center;
-            out[base + taps + 1] = scale;
+
+            if (Math.abs(sum) < 1e-6f) {
+                out[base] = 1f;
+                for (int k = 1; k < taps; k++) out[base + k] = 0f;
+            } else {
+                for (int k = 0; k < taps; k++) out[base + k] /= sum;
+            }
+
+            out[base + taps]     = first;   // 采样起点
+            out[base + taps + 1] = scale;   // 备用
         }
         return out;
     }
 
-    /** 为每个输出像素生成源索引表 */
+    /**
+     * 为每个输出像素生成源索引表。
+     * 起点直接从 buildWeights 写进表尾的 first 读，保证权重和索引永远对齐。
+     */
     private static int[] buildIndexTable(int srcLen, int dstLen, float[] weights) {
         int taps = 2 * LOBES;
         int stride = taps + 2;
-        int[] tab = new int[dstLen * stride];
-        float scale = (float) srcLen / dstLen;
+        int[] tab = new int[dstLen * taps];
         for (int i = 0; i < dstLen; i++) {
-            int base = i * stride;
-            float center = (i + 0.5f) * scale - 0.5f;
+            int wbase = i * stride;
+            int first = (int) weights[wbase + taps];
+            int tbase = i * taps;
             for (int k = 0; k < taps; k++) {
-                int idx = Math.round(center + (k - LOBES + 0.5f) * Math.max(1f, scale));
-                tab[base + k] = idx;
+                tab[tbase + k] = first + k;
             }
         }
         return tab;
