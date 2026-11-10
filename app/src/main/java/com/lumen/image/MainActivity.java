@@ -272,18 +272,48 @@ public class MainActivity extends AppCompatActivity {
                     RootBackend.start();
                 }
 
-                int waited = 0;
-                while (waited < 3 * 60 * 1000) {
+                // ══════════════════════════════════════════════════
+                // 等后端就绪。
+                // 旧逻辑只 ping 端口：进程崩了也白等 3 分钟才报错。
+                // 新逻辑：端口 + 进程双探，崩了立刻失败；超时上限拉到 8 分钟，
+                // 状态栏显示真实已等时长。
+                // ══════════════════════════════════════════════════
+                final long t0 = System.currentTimeMillis();
+                final long MAX_WAIT = 8 * 60 * 1000L;
+                int diedStreak = 0;
+                boolean ready = false;
+
+                while (System.currentTimeMillis() - t0 < MAX_WAIT) {
                     if (CANCEL_FLAG) { cancelUi(); return; }
-                    boolean ok = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
-                    if (ok) break;
+
+                    boolean portOk = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
+                    if (portOk) { ready = true; break; }
+
+                    // 端口没起时看进程：进程没了就是崩了，别傻等到超时
+                    boolean procAlive = useGpu ? GpuBackend.ping() : RootBackend.isRunning();
+                    if (!procAlive) {
+                        if (++diedStreak >= 2) {
+                            long ms = System.currentTimeMillis() - t0;
+                            fail("后端进程已退出（等了 " + fmt(ms / 1000) + "）\n"
+                                    + shorten(RootBackend.log(12), 500));
+                            return;
+                        }
+                    } else {
+                        diedStreak = 0;
+                    }
+
+                    long el = (System.currentTimeMillis() - t0) / 1000;
+                    final String ph = "加载模型 " + fmt(el);
+                    PHASE = ph;
+                    ui.post(() -> { if (!BUSY.get()) return; tvStatus.setText(ph); });
+
                     try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-                    waited += 1000;
-                    PHASE = "加载模型";
                 }
-                boolean ok = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
-                if (!ok) {
-                    fail("后端启动超时（3 分钟）\n" + shorten(RootBackend.log(8), 300));
+
+                if (!ready) {
+                    long ms = System.currentTimeMillis() - t0;
+                    fail("后端启动超时（" + fmt(ms / 1000) + "）\n"
+                            + shorten(RootBackend.log(12), 500));
                     return;
                 }
             }
