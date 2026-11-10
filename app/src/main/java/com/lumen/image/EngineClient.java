@@ -22,7 +22,11 @@ import java.nio.charset.StandardCharsets;
 public class EngineClient {
 
     private static final String TAG = "LumenEngine";
+    /** CPU 后端端口 */
     public static final int PORT = 8189;
+    /** GPU 后端端口 */
+    public static final int PORT_GPU = 8191;
+
     public static final String BASE = "http://127.0.0.1:" + PORT;
 
     /** 取消标志 —— 停止按钮置 true，读流时就会中断 */
@@ -74,9 +78,14 @@ public class EngineClient {
 
     // ─── 主流程（阻塞，必须放子线程）───────────────────────────
     public static void generate(Request req, Callback cb, Ctl ctl) {
+        generate(req, PORT, cb, ctl);
+    }
+
+    /** 指定端口生成：CPU=8189，GPU=8191 */
+    public static void generate(Request req, int port, Callback cb, Ctl ctl) {
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(BASE + "/generate").openConnection();
+            conn = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/generate").openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(10_000);

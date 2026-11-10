@@ -18,11 +18,96 @@
             android:textSize="22sp"
             android:textStyle="bold" />
 
-        <!-- 模型目录 -->
+        <!-- ═══════════ 后端 ═══════════ -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="20dp"
+            android:text="计算后端"
+            android:textColor="#8A8AA0"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rg_backend"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/rb_cpu"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="#66D9A0"
+                android:text="CPU　稳定，约 7 分钟/张，手机正常用"
+                android:textColor="#C0C0D0"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_opencl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:buttonTint="#D9A066"
+                android:text="GPU　实验性，同速度但会更耗电发烫"
+                android:textColor="#D0B0A0"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <TextView
+            android:id="@+id/tv_gpu_warn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#1E1512"
+            android:padding="10dp"
+            android:text="⚠ GPU 模式：Adreno 730 与 CPU 共享内存总线，跑图时会抢占带宽，可能造成界面卡顿。已自动限带宽+降优先级，但仍建议在手机闲置时使用。速度不比 CPU 快。"
+            android:textColor="#D9A066"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
+        <!-- ═══════════ 超分 ═══════════ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="超分 2×"
+                    android:textColor="#C0C0D0"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/tv_upscale_hint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Lanczos3 重采样，512 → 1024，不改变内容"
+                    android:textColor="#6A6A7A"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
+            <Switch
+                android:id="@+id/sw_upscale"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <!-- ═══════════ 模型 ═══════════ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:text="模型目录"
             android:textColor="#8A8AA0"
             android:textSize="13sp" />
@@ -50,12 +135,12 @@
             android:textColor="#7A9A88"
             android:textSize="11sp" />
 
-        <!-- 后端管理 -->
+        <!-- ═══════════ 后端管理 ═══════════ -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:text="root 后端"
+            android:text="后端进程"
             android:textColor="#8A8AA0"
             android:textSize="13sp" />
 
@@ -82,104 +167,45 @@
                 android:layout_width="0dp"
                 android:layout_height="42dp"
                 android:layout_weight="1"
-                android:text="启动"
-                android:textSize="12sp"
                 android:backgroundTint="#2A3A32"
-                android:textColor="#88DDB0" />
+                android:text="启动"
+                android:textColor="#88DDB0"
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btn_be_stop"
                 android:layout_width="0dp"
                 android:layout_height="42dp"
-                android:layout_weight="1"
                 android:layout_marginStart="6dp"
-                android:text="停止"
-                android:textSize="12sp"
+                android:layout_weight="1"
                 android:backgroundTint="#2A2A32"
-                android:textColor="#B0B0C0" />
+                android:text="停止"
+                android:textColor="#B0B0C0"
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btn_be_log"
                 android:layout_width="0dp"
                 android:layout_height="42dp"
-                android:layout_weight="1"
                 android:layout_marginStart="6dp"
-                android:text="日志"
-                android:textSize="12sp"
+                android:layout_weight="1"
                 android:backgroundTint="#2A2A32"
-                android:textColor="#B0B0C0" />
+                android:text="日志"
+                android:textColor="#B0B0C0"
+                android:textSize="12sp" />
         </LinearLayout>
 
-        <!-- 后端 -->
-        <TextView
+        <Button
+            android:id="@+id/btn_gpu_stop"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="计算后端"
-            android:textColor="#8A8AA0"
-            android:textSize="13sp" />
+            android:layout_height="42dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#3A2020"
+            android:text="GPU 紧急停止 + 恢复系统"
+            android:textColor="#E08080"
+            android:textSize="12sp" />
 
-        <RadioGroup
-            android:id="@+id/rg_backend"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:orientation="vertical">
-
-            <RadioButton
-                android:id="@+id/rb_cpu"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="#66D9A0"
-                android:text="CPU（已实测可用，约 8 分钟/张）"
-                android:textColor="#C0C0D0"
-                android:textSize="13sp" />
-
-            <RadioButton
-                android:id="@+id/rb_opencl"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="#66D9A0"
-                android:text="GPU · OpenCL（Adreno 730，未实测）"
-                android:textColor="#C0C0D0"
-                android:textSize="13sp" />
-        </RadioGroup>
-
-        <!-- 权重存放 -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="权重存放"
-            android:textColor="#8A8AA0"
-            android:textSize="13sp" />
-
-        <RadioGroup
-            android:id="@+id/rg_params"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <RadioButton
-                android:id="@+id/rb_disk"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="#66D9A0"
-                android:text="磁盘流式（省内存，约 4 GB）"
-                android:textColor="#C0C0D0"
-                android:textSize="13sp" />
-
-            <RadioButton
-                android:id="@+id/rb_ram"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="#66D9A0"
-                android:text="全部加载到内存（需 8 GB+ 空闲，可能更快）"
-                android:textColor="#C0C0D0"
-                android:textSize="13sp" />
-        </RadioGroup>
-
-        <!-- 尺寸 -->
+        <!-- ═══════════ 尺寸 ═══════════ -->
         <TextView
             android:id="@+id/tv_size"
             android:layout_width="match_parent"
@@ -196,7 +222,7 @@
             android:progressTint="#66D9A0"
             android:thumbTint="#66D9A0" />
 
-        <!-- CFG -->
+        <!-- ═══════════ CFG ═══════════ -->
         <TextView
             android:id="@+id/tv_cfg"
             android:layout_width="match_parent"
@@ -213,13 +239,13 @@
             android:progressTint="#66D9A0"
             android:thumbTint="#66D9A0" />
 
-        <!-- LoRA -->
+        <!-- ═══════════ LoRA ═══════════ -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <TextView
                 android:layout_width="0dp"
@@ -251,27 +277,30 @@
             android:progressTint="#66D9A0"
             android:thumbTint="#66D9A0" />
 
-        <!-- 监听 -->
-        <LinearLayout
+        <!-- ═══════════ 线程 ═══════════ -->
+        <TextView
+            android:id="@+id/tv_threads"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:text="CPU 线程 6"
+            android:textColor="#C0C0D0"
+            android:textSize="13sp" />
 
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="允许局域网访问（给电脑用）"
-                android:textColor="#C0C0D0"
-                android:textSize="13sp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="8 核建议留 2 个给系统，开满会导致界面无响应"
+            android:textColor="#6A6A7A"
+            android:textSize="10sp" />
 
-            <Switch
-                android:id="@+id/sw_listen"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
+        <SeekBar
+            android:id="@+id/sb_threads"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:progressTint="#66D9A0"
+            android:thumbTint="#66D9A0" />
 
         <Button
             android:id="@+id/btn_save_settings"
@@ -279,11 +308,11 @@
             android:layout_height="50dp"
             android:layout_marginTop="24dp"
             android:layout_marginBottom="20dp"
-            android:text="保存"
-            android:textSize="15sp"
-            android:textStyle="bold"
             android:backgroundTint="#66D9A0"
-            android:textColor="#0E0E12" />
+            android:text="保存"
+            android:textColor="#0E0E12"
+            android:textSize="15sp"
+            android:textStyle="bold" />
 
     </LinearLayout>
 </ScrollView>

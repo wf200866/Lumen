@@ -1,6 +1,7 @@
 package com.lumen.image;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -40,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "LumenMain";
     private static final int REQ_PERM = 20;
+    private static final int REQ_HISTORY = 21;
 
     // ── 跨 Activity 实例保活的状态（static）────────────────
     static final AtomicBoolean BUSY       = new AtomicBoolean(false);
@@ -51,17 +53,20 @@ public class MainActivity extends AppCompatActivity {
     static volatile boolean    CANCEL_FLAG = false;
 
     private Config cfg;
+    private HistoryStore store;
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private EditText etPrompt, etNeg, etSeed;
-    private Button btnStart, btnStop, btnSave, btnSettings;
+    private Button btnStart, btnStop, btnSave, btnSettings, btnHistory;
     private TextView tvStatus, tvInfo, tvSteps, tvPlaceholder;
     private ImageView ivImage;
     private ProgressBar bar;
     private SeekBar sbSteps;
 
-    /** 每秒刷新已用时间，不依赖后端事件 */
+    /** 已生成的图是否已入库（防止重复保存） */
+    private volatile boolean savedThisRun = false;
+
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             if (!BUSY.get()) return;
@@ -84,6 +89,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         cfg = new Config(this);
+        store = new HistoryStore(this);
 
         etPrompt      = findViewById(R.id.et_prompt);
         etNeg         = findViewById(R.id.et_neg);
@@ -92,6 +98,7 @@ public class MainActivity extends AppCompatActivity {
         btnStop       = findViewById(R.id.btn_stop);
         btnSave       = findViewById(R.id.btn_save);
         btnSettings   = findViewById(R.id.btn_settings);
+        btnHistory    = findViewById(R.id.btn_history);
         tvStatus      = findViewById(R.id.tv_status);
         tvInfo        = findViewById(R.id.tv_info);
         tvSteps       = findViewById(R.id.tv_steps);
@@ -120,6 +127,8 @@ public class MainActivity extends AppCompatActivity {
         });
         btnSave.setOnClickListener(v -> saveImage());
         btnSettings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
+        btnHistory.setOnClickListener(v ->
+                startActivityForResult(new Intent(this, HistoryActivity.class), REQ_HISTORY));
         ivImage.setOnClickListener(v -> { if (CURRENT_BMP != null) openFullscreen(); });
 
         requestPerms();
@@ -129,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        tvInfo.setText((cfg.isGpu() ? "GPU" : "CPU") + " · " + cfg.size() + "×" + cfg.size());
+        refreshInfo();
         if (BUSY.get()) startTicker();
         restoreState();
         if (!BUSY.get()) refreshStatus();
@@ -139,6 +148,12 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         ui.removeCallbacks(ticker);
         super.onDestroy();
+    }
+
+    private void refreshInfo() {
+        String be = cfg.isGpu() ? "GPU" : "CPU";
+        String up = cfg.upscale2x() ? " · 2×超分" : "";
+        tvInfo.setText(be + " · " + cfg.size() + "×" + cfg.size() + up);
     }
 
     // ────────────────────────────────────────────────────────
@@ -165,13 +180,15 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshStatus() {
         pool.execute(() -> {
-            boolean port = RootBackend.pingPort();
+            boolean cpuPort = RootBackend.pingPort();
+            boolean gpuPort = GpuBackend.ping();
             String st = RootBackend.status();
             ui.post(() -> {
                 if (BUSY.get()) return;
-                if (port) {
-                    int rss = RootBackend.parseRss(st);
-                    tvStatus.setText("后端就绪 ✓" + (rss > 0 ? " · " + rss + " MB" : ""));
+                if (cpuPort || gpuPort) {
+                    String which = cpuPort ? "CPU" : "GPU";
+                    int rss = cpuPort ? RootBackend.parseRss(st) : -1;
+                    tvStatus.setText(which + " 后端就绪 ✓" + (rss > 0 ? " · " + rss + " MB" : ""));
                 } else if (st.startsWith("RUNNING")) {
                     tvStatus.setText("后端启动中…");
                 } else if ("NOTDEPLOYED".equals(st)) {
@@ -191,11 +208,17 @@ public class MainActivity extends AppCompatActivity {
         if (TextUtils.isEmpty(prompt)) { toast("先写 prompt"); return; }
 
         final int size = cfg.size();
+        final boolean useGpu = cfg.isGpu();
+        final boolean doUpscale = cfg.upscale2x();
+        final int steps = cfg.steps();
+        final float cfgVal = cfg.cfg();
+        final int finalSize = size;
+
         final EngineClient.Request req = new EngineClient.Request();
         req.prompt = prompt;
         req.negative = etNeg.getText().toString().trim();
-        req.steps = cfg.steps();
-        req.cfg = cfg.cfg();
+        req.steps = steps;
+        req.cfg = cfgVal;
         req.width = size;
         req.height = size;
         req.loraPath = cfg.useLora() ? cfg.loraPath() : null;
@@ -208,6 +231,7 @@ public class MainActivity extends AppCompatActivity {
         CANCEL_FLAG = false;
         INDETERMINATE = true;
         PROGRESS = 0;
+        savedThisRun = false;
         T_START.set(System.currentTimeMillis());
         PHASE = "准备中";
 
@@ -217,46 +241,55 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText(PHASE);
         startTicker();
 
+        final int port = useGpu ? EngineClient.PORT_GPU : EngineClient.PORT;
+
         pool.execute(() -> {
             // ── 1. 确保后端在跑 ──────────────────────
-            if (!RootBackend.pingPort()) {
-                RootBackend.stop();          // 清理僵尸 pid
-
+            boolean alive = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
+            if (!alive) {
                 setPhase("检查 root");
                 if (!RootBackend.hasRoot()) { fail("没有 root 权限，需要 KSU / Magisk"); return; }
 
-                if (!RootBackend.isDeployed()) {
-                    setPhase("首次部署（65 MB，约 30 秒）");
-                    String r = RootBackend.deploy(this);
-                    if (!"ok".equals(r)) { fail("部署失败：" + r); return; }
+                if (useGpu) {
+                    if (!cfg.gpuRiskAccepted()) { fail("请先在设置里确认 GPU 风险"); return; }
+                    setPhase("准备 GPU 后端");
+                    if (!GpuBackend.isDeployed()) {
+                        setPhase("部署 GPU 后端");
+                        String r = GpuBackend.deploy(this);
+                        if (!"ok".equals(r)) { fail("GPU 部署失败：" + r); return; }
+                    }
+                    RootBackend.sh("for p in $(pidof libstable_diffusion_core.so 2>/dev/null); do kill -9 $p; done", 15);
+                    GpuBackend.start(cfg.modelDir(), Math.min(6, cfg.threads()), 550, 2.5f);
+                } else {
+                    RootBackend.stop();   // 清理僵尸
+                    if (!RootBackend.isDeployed()) {
+                        setPhase("首次部署（约 30 秒）");
+                        String r = RootBackend.deploy(this);
+                        if (!"ok".equals(r)) { fail("部署失败：" + r); return; }
+                    }
+                    RootBackend.clearLog();
+                    setPhase("启动后端");
+                    RootBackend.start();
                 }
-
-                RootBackend.clearLog();
-                setPhase("启动后端");
-                RootBackend.start();
 
                 int waited = 0;
                 while (waited < 3 * 60 * 1000) {
                     if (CANCEL_FLAG) { cancelUi(); return; }
-                    if (RootBackend.pingPort()) break;
-                    if (waited > 5000 && waited % 5000 < 1200) {
-                        if (RootBackend.status().startsWith("STOPPED")) {
-                            fail("后端启动后立刻退出\n" + shorten(RootBackend.log(8), 300));
-                            return;
-                        }
-                    }
+                    boolean ok = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
+                    if (ok) break;
                     try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
                     waited += 1000;
                     PHASE = "加载模型";
                 }
-                if (!RootBackend.pingPort()) {
+                boolean ok = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
+                if (!ok) {
                     fail("后端启动超时（3 分钟）\n" + shorten(RootBackend.log(8), 300));
                     return;
                 }
             }
 
             // ── 2. 提交生成 ──────────────────────────
-            PHASE = "等待首步";
+            setPhase("等待首步");
             INDETERMINATE = false;
             ui.post(() -> {
                 bar.setIndeterminate(false);
@@ -267,13 +300,14 @@ public class MainActivity extends AppCompatActivity {
             final AtomicBoolean done = new AtomicBoolean(false);
             final AtomicBoolean died = new AtomicBoolean(false);
 
-            // 看门狗：后端死了要报出来，不能一直转圈
+            // 看门狗
             Thread wd = new Thread(() -> {
                 int miss = 0;
                 while (!done.get()) {
                     try { Thread.sleep(4000); } catch (InterruptedException ignored) {}
                     if (done.get()) return;
-                    if (!RootBackend.pingPort()) {
+                    boolean ok2 = useGpu ? GpuBackend.ping() : RootBackend.pingPort();
+                    if (!ok2) {
                         if (++miss >= 3) {
                             died.set(true);
                             fail("后端进程意外退出（被系统杀掉或崩溃）\n"
@@ -286,7 +320,7 @@ public class MainActivity extends AppCompatActivity {
             wd.setDaemon(true);
             wd.start();
 
-            EngineClient.generate(req, new EngineClient.Callback() {
+            EngineClient.generate(req, port, new EngineClient.Callback() {
                 @Override public void onProgress(int step, int total) {
                     if (died.get()) return;
                     PROGRESS = total > 0 ? step * 100 / total : 0;
@@ -304,22 +338,53 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override public void onImage(Bitmap bmp, long totalMs, long firstMs) {
                     done.set(true);
-                    CURRENT_BMP = bmp;
-                    PHASE = String.format(Locale.US,
-                            "完成 · 共 %d 秒（首步 %.1f 秒）",
-                            totalMs / 1000, firstMs / 1000.0);
+                    long elapsed = totalMs > 0 ? totalMs : (System.currentTimeMillis() - T_START.get());
+
+                    // ── 超分（可选，纯 CPU 后处理）──
+                    Bitmap result = bmp;
+                    if (doUpscale) {
+                        setPhase("超分中");
+                        try {
+                            result = Upscaler.upscale2x(bmp);
+                        } catch (Exception e) {
+                            Log.w(TAG, "超分失败，用原图", e);
+                            result = bmp;
+                        }
+                    }
+
+                    CURRENT_BMP = result;
+
+                    // ── 自动入库 ──
+                    final Bitmap saved = result;
+                    if (!savedThisRun) {
+                        savedThisRun = true;
+                        store.save(saved, prompt, req.negative, steps, cfgVal,
+                                finalSize, String.valueOf(req.seed),
+                                useGpu ? "GPU" : "CPU", elapsed);
+                    }
+
+                    PHASE = String.format(Locale.US, "完成 · %d 秒（首步 %.0f 秒）%s",
+                            elapsed / 1000, firstMs / 1000.0,
+                            doUpscale ? " · 已超分" : "");
                     ui.post(() -> {
-                        ivImage.setImageBitmap(bmp);
+                        ivImage.setImageBitmap(saved);
                         if (tvPlaceholder != null) tvPlaceholder.setVisibility(View.GONE);
                         bar.setProgress(100);
                         finishRun();
                         tvStatus.setText(PHASE);
+                        refreshInfo();
                     });
                 }
 
-                @Override public void onError(String msg) {
+                @Override
+                public void onError(String msg) {
                     done.set(true);
-                    if (!died.get()) fail(msg);
+                    if (died.get()) return;
+                    // GPU 出错时自动恢复硬件，避免留在异常状态
+                    if (useGpu) {
+                        try { GpuBackend.stop(); } catch (Exception ignored) {}
+                    }
+                    fail(msg);
                 }
             }, () -> CANCEL_FLAG);
 
@@ -406,6 +471,36 @@ public class MainActivity extends AppCompatActivity {
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(i);
         } catch (Exception e) { toast("打不开"); }
+    }
+
+    // ── 从历史里选一组参数回填 ──
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_HISTORY || res != RESULT_OK || data == null) return;
+        long id = data.getLongExtra(HistoryActivity.EXTRA_PICK_ID, -1);
+        if (id < 0) return;
+
+        pool.execute(() -> {
+            java.util.List<HistoryStore.Item> list = store.recent(300);
+            HistoryStore.Item hit = null;
+            for (HistoryStore.Item it : list) if (it.id == id) { hit = it; break; }
+            if (hit == null) return;
+            final HistoryStore.Item f = hit;
+
+            ui.post(() -> {
+                etPrompt.setText(f.prompt == null ? "" : f.prompt);
+                etNeg.setText(f.negative == null ? "" : f.negative);
+                etSeed.setText(f.seed == null ? "" : f.seed);
+                cfg.setSteps(f.steps);
+                cfg.setCfg(f.cfg);
+                cfg.setSize(f.size);
+                sbSteps.setProgress(Math.min(Math.max(f.steps, 1), 12));
+                tvSteps.setText(f.steps + " 步");
+                refreshInfo();
+                toast("已回填这组参数");
+            });
+        });
     }
 
     // ────────────────────────────────────────────────────────

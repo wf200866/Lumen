@@ -4,8 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
- * 全部可调参数。
- * 注意：所有值都有合法范围校验，避免写进后端不认识的参数。
+ * 全部可调参数。所有值都有合法范围校验。
  */
 public class Config {
 
@@ -20,11 +19,14 @@ public class Config {
     private static final String K_USE_LORA    = "use_lora";
     private static final String K_LISTEN_ALL  = "listen_all";
     private static final String K_THREADS     = "threads";
+    private static final String K_UPSCALE     = "upscale_2x";
+    private static final String K_GPU_RISK    = "gpu_risk_accepted";
 
+    /** 默认模型目录：优先 /data 快路径（f2fs 直读 455MB/s），回退到原路径 */
+    public static final String FAST_MODEL_DIR = "/data/local/lumen_models";
     public static final String DEFAULT_MODEL_DIR =
             "/storage/emulated/0/Download/Nightmare/models/moss_image_4step";
 
-    // 合法范围
     public static final int STEPS_MIN = 1, STEPS_MAX = 12;
     public static final int SIZE_MIN = 384, SIZE_MAX = 1024;
     public static final float CFG_MIN = 1.0f, CFG_MAX = 30.0f;
@@ -35,15 +37,17 @@ public class Config {
         sp = c.getApplicationContext().getSharedPreferences(PREF, Context.MODE_PRIVATE);
     }
 
+    /** 模型目录：自动选可用的那个，不写死 */
     public String modelDir() {
-        String v = sp.getString(K_MODEL_DIR, DEFAULT_MODEL_DIR);
-        return (v == null || v.trim().isEmpty()) ? DEFAULT_MODEL_DIR : v.trim();
+        String v = sp.getString(K_MODEL_DIR, "");
+        if (v != null && !v.trim().isEmpty()) return v.trim();
+        if (new java.io.File(FAST_MODEL_DIR + "/dit.gguf").exists()) return FAST_MODEL_DIR;
+        return DEFAULT_MODEL_DIR;
     }
     public void setModelDir(String v) {
-        sp.edit().putString(K_MODEL_DIR, v == null ? DEFAULT_MODEL_DIR : v.trim()).apply();
+        sp.edit().putString(K_MODEL_DIR, v == null ? "" : v.trim()).apply();
     }
 
-    /** "cpu" 或 "opencl"（只有这两个合法） */
     public String backend() {
         String v = sp.getString(K_BACKEND, "cpu");
         return "opencl".equals(v) ? "opencl" : "cpu";
@@ -52,6 +56,9 @@ public class Config {
         sp.edit().putString(K_BACKEND, "opencl".equals(v) ? "opencl" : "cpu").apply();
     }
     public boolean isGpu() { return "opencl".equals(backend()); }
+
+    public boolean gpuRiskAccepted() { return sp.getBoolean(K_GPU_RISK, false); }
+    public void setGpuRiskAccepted(boolean v) { sp.edit().putBoolean(K_GPU_RISK, v).apply(); }
 
     public int steps() {
         int v = sp.getInt(K_STEPS, 4);
@@ -88,16 +95,26 @@ public class Config {
         sp.edit().putFloat(K_LORA, Math.max(0f, Math.min(v, 2.0f))).apply();
     }
 
+    /** 超分 2×：纯 CPU 后处理，默认关 */
+    public boolean upscale2x() { return sp.getBoolean(K_UPSCALE, false); }
+    public void setUpscale2x(boolean v) { sp.edit().putBoolean(K_UPSCALE, v).apply(); }
+
     public boolean listenAll() { return sp.getBoolean(K_LISTEN_ALL, false); }
     public void setListenAll(boolean v) { sp.edit().putBoolean(K_LISTEN_ALL, v).apply(); }
 
     public int threads() {
-        int def = Math.max(4, Runtime.getRuntime().availableProcessors());
-        int v = sp.getInt(K_THREADS, def);
-        return clamp(v, 1, 16);
+        int v = sp.getInt(K_THREADS, 0);
+        if (v <= 0) return defaultThreads();
+        return clamp(v, 1, 8);
     }
     public void setThreads(int v) {
-        sp.edit().putInt(K_THREADS, clamp(v, 1, 16)).apply();
+        sp.edit().putInt(K_THREADS, clamp(v, 0, 8)).apply();
+    }
+
+    /** 默认线程数：8 核留 2 个给系统 */
+    public static int defaultThreads() {
+        int n = Runtime.getRuntime().availableProcessors();
+        return Math.max(2, n - 2);
     }
 
     public String loraPath() {
