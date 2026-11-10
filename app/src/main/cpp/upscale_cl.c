@@ -74,7 +74,7 @@ typedef cl_handle(*PFN_clCreateCommandQueue)(cl_handle, cl_handle, cl_ulong, cl_
 typedef cl_handle(*PFN_clCreateProgramWithSource)(cl_handle, cl_uint, const char**, const size_t*, cl_int*);
 typedef cl_int   (*PFN_clBuildProgram)(cl_handle, cl_uint, const cl_handle*, const char*, void*, void*);
 typedef cl_handle(*PFN_clCreateKernel)(cl_handle, const char*, cl_int*);
-typedef cl_handle(*PFN_clCreateBuffer)(cl_handle, cl_ulong, const void*, cl_int*);
+typedef cl_handle(*PFN_clCreateBuffer)(cl_handle, cl_ulong, cl_ulong, const void*, cl_int*);
 typedef cl_int   (*PFN_clSetKernelArg)(cl_handle, cl_uint, size_t, const void*);
 typedef cl_int   (*PFN_clEnqueueNDRangeKernel)(cl_handle, cl_handle, cl_uint, const size_t*,
                                                const size_t*, const size_t*,
